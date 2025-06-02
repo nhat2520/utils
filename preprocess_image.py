@@ -20,8 +20,9 @@ class ImageProcessor:
             image_array (np.ndarray, optional): Mảng NumPy đại diện cho ảnh.
                                                 Cần cung cấp image_path hoặc image_array.
         """
-        if image_path:
-            self.original_image = cv2.imread(image_path)
+        if image_path is not None:
+            image = cv2.imread(image_path)
+            self.original_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             if self.original_image is None:
                 raise ValueError(f"Không thể đọc ảnh từ: {image_path}")
         elif image_array is not None:
@@ -44,16 +45,48 @@ class ImageProcessor:
         """Trả về ảnh đã xử lý hiện tại."""
         return self.image
 
-    # --- 1. Tăng Cường Độ Tương Phản ---
-    def histogram_equalization(self):
-        """Thực hiện cân bằng biểu đồ độ sáng."""
-        if self._is_grayscale():
-            self.image = cv2.equalizeHist(self.image)
+    # --- Xử lý tóc bằng DullRazor ---
+ 
+    def remove_hair_dullrazor(self, kernel_size=11, inpaint_radius=5, threshold_val=10):
+        """
+        Loại bỏ tóc trên ảnh bằng thuật toán DullRazor phiên bản đơn giản và hiệu quả.
+        Sử dụng Black-hat morphology để phát hiện tóc và inpainting để loại bỏ tóc.
+
+        Args:
+            kernel_size (int): Kích thước kernel cho phép toán morphology. Tăng giá trị để phát hiện tóc dài hơn.  
+            inpaint_radius (int): Bán kính cho inpainting. Tăng giá trị để lấp đầy vùng tóc rộng hơn.
+            threshold_val (int): Ngưỡng cho việc phát hiện tóc. Giá trị càng thấp, phát hiện càng nhạy.
+        """
+        print("Đang loại bỏ tóc (DullRazor Đơn Giản)...")
+        
+        # Lưu ảnh gốc cho bước inpainting
+        source_image = self.image.copy()
+        
+        # Chuyển sang ảnh xám nếu cần
+        if len(self.image.shape) == 3 and self.image.shape[2] == 3:
+            gray_image = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
+        elif len(self.image.shape) == 3 and self.image.shape[2] == 1:
+            gray_image = self.image[:,:,0]
         else:
-            img_ycrcb = cv2.cvtColor(self.image, cv2.COLOR_BGR2YCrCb)
-            img_ycrcb[:, :, 0] = cv2.equalizeHist(img_ycrcb[:, :, 0])
-            self.image = cv2.cvtColor(img_ycrcb, cv2.COLOR_YCrCb2BGR)
-        print("Đã áp dụng Histogram Equalization.")
+            gray_image = self.image.copy()
+
+        # 1. Phát hiện tóc bằng black-hat morphology
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        blackhat = cv2.morphologyEx(gray_image, cv2.MORPH_BLACKHAT, kernel)
+        
+        # 2. Áp dụng ngưỡng để tạo mask tóc
+        _, hair_mask = cv2.threshold(blackhat, threshold_val, 255, cv2.THRESH_BINARY)
+        
+        # 3. Làm sạch mask bằng morphology
+        hair_mask = cv2.morphologyEx(hair_mask, cv2.MORPH_CLOSE, 
+                                   cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)), iterations=1)
+        
+        # 4. Loại bỏ tóc bằng inpainting
+        self.image = cv2.inpaint(source_image, hair_mask, inpaint_radius, cv2.INPAINT_TELEA)
+        
+        # Đếm số vùng tóc để thông báo
+        contours, _ = cv2.findContours(hair_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        print(f"Loại bỏ tóc (DullRazor Đơn Giản) hoàn tất. {len(contours)} vùng tóc được xử lý.")
         return self
 
     def clahe(self, clip_limit=2.0, tile_grid_size=(8, 8)):
@@ -199,6 +232,11 @@ class ImageProcessor:
     
     def to_grayscale(self):
         """Chuyển ảnh sang ảnh xám."""
+        if self.image.dtype != np.uint8:
+            if self.image.max() <= 1.0:  # Nếu ảnh ở dạng float [0,1]
+                self.image = (self.image * 255).astype(np.uint8)
+            else:
+                self.image = self.image.astype(np.uint8)
         if not self._is_grayscale():
             self.image = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
             print("Đã chuyển sang ảnh xám.")
@@ -336,39 +374,3 @@ class ImageProcessor:
 
 
 
-
-def apply_mask_with_outline(image: np.ndarray,
-                            mask: np.ndarray,
-                            mask_color: tuple = (0, 255, 0),
-                            alpha: float = 0,
-                            outline_color: tuple = (0, 255, 0),
-                            thickness: int = 2) -> np.ndarray:
-    """
-    Áp mask lên ảnh với fill và contour.
-
-    - image: ảnh BGR (H×W×3)
-    - mask: ảnh nhị phân (H'×W') hoặc float [0,255]
-    - mask_color: (B,G,R)
-    - alpha: độ trong suốt (0–1)
-    - outline_color: (B,G,R)
-    - thickness: độ dày contour
-    """
-    h, w = image.shape[:2]
-    # nếu mask khác kích thước, resize về H×W
-    if mask.shape[:2] != (h, w):
-        mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
-    # nhị phân
-    _, bin_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-    # tạo ảnh màu fill
-    colored_mask = np.zeros_like(image, dtype=image.dtype)
-    colored_mask[:] = mask_color
-    # chỉ giữ vùng mask
-    colored_mask = cv2.bitwise_and(colored_mask, colored_mask, mask=bin_mask)
-    # overlay: blend image + colored_mask
-    overlay = cv2.addWeighted(image, 1.0, colored_mask, alpha, 0)
-
-    # tìm contour & vẽ lên overlay
-    contours, _ = cv2.findContours(bin_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(overlay, contours, -1, outline_color, thickness)
-
-    return overlay

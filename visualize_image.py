@@ -37,22 +37,24 @@ def apply_mask_with_outline(image: np.ndarray,
     """
     Áp mask lên ảnh với fill và contour.
 
-    - image: ảnh BGR (H×W×3)
+    - image: ảnh BGR (H×W×3) hoặc ảnh xám (H×W)
     - mask: ảnh nhị phân (H'×W') hoặc float [0,255]
-    - mask_color: (B,G,R)
+    - mask_color: (B,G,R) (chỉ dùng cho ảnh màu)
     - alpha: độ trong suốt (0–1)
-    - outline_color: (B,G,R)
+    - outline_color: (B,G,R) (chỉ dùng cho ảnh màu)
     - thickness: độ dày contour
     """
     h, w = image.shape[:2]
+    channels = image.shape[2] if len(image.shape) == 3 else 1
     # nếu mask khác kích thước, resize về H×W
     if mask.shape[:2] != (h, w):
         mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
     # nhị phân
     _, bin_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
     # tạo ảnh màu fill
-    colored_mask = np.zeros_like(image, dtype=image.dtype)
-    colored_mask[:] = mask_color
+    colored_mask = np.zeros((h, w, channels), dtype=image.dtype)
+    if channels == 3:  # ảnh màu
+        colored_mask[:] = mask_color
     # chỉ giữ vùng mask
     colored_mask = cv2.bitwise_and(colored_mask, colored_mask, mask=bin_mask)
     # overlay: blend image + colored_mask
@@ -60,7 +62,10 @@ def apply_mask_with_outline(image: np.ndarray,
 
     # tìm contour & vẽ lên overlay
     contours, _ = cv2.findContours(bin_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(overlay, contours, -1, outline_color, thickness)
+    if channels == 3:  # ảnh màu
+        cv2.drawContours(overlay, contours, -1, outline_color, thickness)
+    else:  # ảnh xám
+        cv2.drawContours(overlay, contours, -1, 255, thickness)
 
     return overlay
     
